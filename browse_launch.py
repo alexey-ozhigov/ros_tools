@@ -8,7 +8,7 @@ from os.path import basename
 from sys import argv
 from sys import stderr
 
-FNAME = '/home/alex/RCH/catkin_ws/src/cob_simulation/cob_gazebo/launch/robot.launch'
+FNAME = 'robot.launch'
 EDITOR = 'vim'
 
 def print_entry(level, basen, *args):
