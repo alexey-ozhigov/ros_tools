@@ -73,7 +73,7 @@ def include_str(entry):
 	return 'include' + begc + str(i_num) + endc + ': ' + entry.attributes['file'].value
 
 def node_str(entry):
-	ret = 'node: %s %s %s' % (entry.attributes['name'].value,
+	ret = 'node: name "%s" pkg "%s" type "%s"' % (entry.attributes['name'].value,
 				              entry.attributes['pkg'].value,
 				              entry.attributes['type'].value)
 	return ret
