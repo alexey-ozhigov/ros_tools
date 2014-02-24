@@ -14,7 +14,10 @@ EDITOR = 'vim'
 
 XML_HEADER = '<?xml version="1.0"?>'
 
-options = {'OutputWarnings': False}
+default_options = {\
+                    'OutputWarnings': False,\
+                    'SubstituteVariables': False,\
+                  }
 
 def print_entry(level, basen, *args):
 	begc =  bcolors.OKBLUE
@@ -40,22 +43,31 @@ class bcolors:
         self.FAIL = ''
         self.ENDC = ''
 
-def resolve_ros_path_iter(path, ros_args):
+def subst_ros_arg(ros_args, key, value, overwrite):
+        if overwrite.has_key(key):
+                ros_args[key] = overwrite[key] 
+        else:
+                ros_args[key] = value
+
+def eval_ros_str_iter(path, ros_args, subst_values):
 	res = re.sub(re.compile('\$\(find'), '$(rospack find', path)
-	res = re.sub(re.compile('\$\(arg robot\)'), '${ROBOT}', res)
-	res = re.sub(re.compile('\$\(arg robot_env\)'), '${ROBOT_ENV}', res)
+	res = re.sub(re.compile('\$\(env ROBOT_ENV.*?\)'), '${ROBOT_ENV}', res)
+	res = re.sub(re.compile('\$\(optenv ROBOT_ENV.*?\)'), '${ROBOT_ENV}', res)
+	res = re.sub(re.compile('\$\(optenv ROBOT.*?\)'), '${ROBOT}', res)
+	res = re.sub(re.compile('\$\(env ROBOT.*?\)'), '${ROBOT}', res)
 	for arg in ros_args.keys():
-		res = re.sub(re.compile('\$\(arg ' + arg + '\)'), ros_args[arg], res)
+                value = subst_values[arg] if subst_values and subst_values.has_key(arg) else ros_args[arg]
+		res = re.sub(re.compile('\$\(arg ' + arg + '\)'), value, res)
 	if path != res:
 		return (res, True)
 	else:
 		return (res, False)
 
-def resolve_ros_path(path, ros_args):
+def eval_ros_str(path, ros_args, subst_values):
 	#print 'resolving', path, 'args', str(ros_args)
 	res = path
 	while True:
-		new_res, were_subst = resolve_ros_path_iter(res, ros_args)
+		new_res, were_subst = eval_ros_str_iter(res, ros_args, options['subst_values'])
 		if not were_subst:
 			break
 		res = new_res
@@ -67,7 +79,7 @@ def arg_str(entry):
 	if entry.getAttribute('value'):
 		ret += entry.attributes['value'].value
 	if entry.getAttribute('default'):
-		ret += '(' + entry.attributes['default'].value + ')'
+		ret += entry.attributes['default'].value
 	return ret
 
 i_num = 1
@@ -105,15 +117,15 @@ def print_internals(child_nodes, level, basen):
             elif child.nodeName == '':
                 print_entry(level, basen, arg_str(child))
 	
-def warn_message(msg):
+def warn_message(msg, options):
         if options['OutputWarnings']:
                 print >>stderr, msg
 
-def browse_launch(dom, fname, includes, ros_args, basen = '', level = 1, recursive = True):
+def browse_launch(dom, fname, includes, ros_args, options, basen = '', level = 1, recursive = True):
 	global i_num
 	for entry in dom.documentElement.childNodes:
                 if entry.attributes and entry.attributes.has_key('if'):
-                        warn_message('IF attribute not supported: %s: %s' % (fname, entry.toxml()))
+                        warn_message('IF attribute not supported: %s: %s' % (fname, entry.toxml()), options)
 		if entry.nodeType != Node.ELEMENT_NODE:
 			continue
 		if entry.nodeName == 'include':
@@ -121,13 +133,13 @@ def browse_launch(dom, fname, includes, ros_args, basen = '', level = 1, recursi
                         #print all internal tags
                         print_internals(entry.childNodes, level, basen)
 			if recursive:
-                                resolved_fname = resolve_ros_path(entry.attributes['file'].value, ros_args)
+                                resolved_fname = eval_ros_str(entry.attributes['file'].value, ros_args, options['subst_values'])
                                 includes[i_num] = resolved_fname
                                 i_num += 1
                                 include_fname = popen('echo -n ' + resolved_fname).read()
                                 include_data = file(include_fname).read()
                                 include_dom = parseString(include_data)
-				browse_launch(include_dom, include_fname, includes, ros_args.copy(), basename(include_fname), level + 1, recursive)
+				browse_launch(include_dom, include_fname, includes, ros_args.copy(), options, basename(include_fname), level + 1, recursive)
 		elif entry.nodeName == 'node':
 			print_entry(level - 1, basen, node_str(entry))
                         print_internals(entry.childNodes, level, basen)
@@ -137,6 +149,9 @@ def browse_launch(dom, fname, includes, ros_args, basen = '', level = 1, recursi
 				ros_args[entry.attributes['name'].value] = entry.attributes['default'].value
 			if entry.getAttribute('value'):
 				ros_args[entry.attributes['name'].value] = entry.attributes['value'].value
+                        #If -v command line param is supplied (dictionary), use the given value
+                        if options['subst_values'] != None:
+                            subst_ros_arg(ros_args[entry.attributes['name'].value], entry.attributes['value'].value, options['subst_values'])
 			print_entry(level - 1, basen, arg_str(entry))
                 elif entry.nodeName == 'rosparam':
                         print_entry(level - 1, basen, rosparam_str(entry))
@@ -154,7 +169,7 @@ def browse_launch(dom, fname, includes, ros_args, basen = '', level = 1, recursi
                                 group_data = '<fake_group>' + group_data + '</fake_group>'
                                 group_data = XML_HEADER + '\n' + group_data
                                 group_dom = parseString(group_data)
-                                browse_launch(group_dom, fname, includes, ros_args.copy(), basename(fname), level, recursive)
+                                browse_launch(group_dom, fname, includes, ros_args.copy(), options, basename(fname), level, recursive)
 		
 def cmd_loop(includes):
 	while True:
@@ -171,12 +186,12 @@ def cmd_loop(includes):
 		editor_cmd = EDITOR + ' ' + includes[n]
 		system(editor_cmd)
 
-def do_browse(fname, recursive, interactive):
+def do_browse(fname, options, recursive, interactive):
 	data = file(fname).read()
 	dom = parseString(data)
 	includes = {}
 	ros_args = {}
-	browse_launch(dom, fname, includes, ros_args, basename(fname), 1, recursive)
+	browse_launch(dom, fname, includes, ros_args, options, basename(fname), 1, recursive)
 	if interactive:
 		cmd_loop(includes)
 
@@ -208,5 +223,13 @@ if __name__ == '__main__':
 		fname = argv[1]
 	except:
 		fname = FNAME
-	do_browse(fname, recursive, interactive)
+        options = default_options
+        try:
+                ind = argv.index('-v')
+                if ind >= 0 and ind < len(argv) - 1:
+                        subst_values = eval(argv[ind - 1])
+        except:
+                subst_values = None
+        options['subst_values'] = subst_values
+	do_browse(fname, options, recursive, interactive)
 	#do_test()
