@@ -78,6 +78,15 @@ def node_str(entry):
 				              entry.attributes['type'].value)
 	return ret
 
+def print_internals(child_nodes, level, basen):
+    for child in child_nodes:
+        if child.nodeType == Node.ELEMENT_NODE:
+            if child.nodeName == 'arg':
+                print_entry(level, basen, arg_str(child))
+            elif child.nodeName == '':
+                print_entry(level, basen, arg_str(child))
+	
+
 def browse_launch(dom, includes, ros_args, basen = '', level = 1, recursive = True):
 	global i_num
 	for entry in dom.documentElement.childNodes:
@@ -88,21 +97,15 @@ def browse_launch(dom, includes, ros_args, basen = '', level = 1, recursive = Tr
 			print_entry(level - 1, basen, include_str(entry))
 			includes[i_num] = resolved_fname
 			i_num += 1
-			for child in entry.childNodes:
-				if child.nodeType == Node.ELEMENT_NODE:
-					if child.nodeName == 'arg':
-						print_entry(level, basen, arg_str(child))
-			include_fname = popen('echo -n ' + resolved_fname).read()
+        		include_fname = popen('echo -n ' + resolved_fname).read()
 			include_data = file(include_fname).read()
 			include_dom = parseString(include_data)
 			if recursive:
 				browse_launch(include_dom, includes, ros_args.copy(), basename(include_fname), level + 1, recursive)
+                        print_internals(entry.childNodes, level, basen)
 		elif entry.nodeName == 'node':
 			print_entry(level - 1, basen, node_str(entry))
-			for child in entry.childNodes:
-				if child.nodeType == Node.ELEMENT_NODE:
-					if child.nodeName == 'arg':
-						print_entry(level, basen, arg_str(entry))
+                        print_internals(entry.childNodes, level, basen)
 		elif entry.nodeName == 'arg':
 			#Update ros_args for later substitutions into launch files
 			if entry.getAttribute('default'):
