@@ -102,6 +102,7 @@ def browse_launch(dom, includes, ros_args, basen = '', level = 1, recursive = Tr
 			include_dom = parseString(include_data)
 			if recursive:
 				browse_launch(include_dom, includes, ros_args.copy(), basename(include_fname), level + 1, recursive)
+                        #print all internal tags
                         print_internals(entry.childNodes, level, basen)
 		elif entry.nodeName == 'node':
 			print_entry(level - 1, basen, node_str(entry))
