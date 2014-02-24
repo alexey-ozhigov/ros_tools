@@ -7,9 +7,14 @@ from os import system
 from os.path import basename
 from sys import argv
 from sys import stderr
+from xml.parsers.expat import ExpatError
 
 FNAME = 'robot.launch'
 EDITOR = 'vim'
+
+XML_HEADER = '<?xml version="1.0"?>'
+
+options = {'OutputWarnings': False}
 
 def print_entry(level, basen, *args):
 	begc =  bcolors.OKBLUE
@@ -18,8 +23,7 @@ def print_entry(level, basen, *args):
 	body = ''
 	for arg in args:
 		body += arg
-	print begc + pref + endc, body
-	
+	print begc + pref + endc, body	
 
 class bcolors:
     HEADER = '\033[95m'
@@ -59,7 +63,7 @@ def resolve_ros_path(path, ros_args):
 	return new_res
 
 def arg_str(entry):
-	ret = 'ARG ' + entry.attributes['name'].value + ' = '
+	ret = 'arg ' + entry.attributes['name'].value + ' = '
 	if entry.getAttribute('value'):
 		ret += entry.attributes['value'].value
 	if entry.getAttribute('default'):
@@ -67,6 +71,7 @@ def arg_str(entry):
 	return ret
 
 i_num = 1
+
 def include_str(entry):
 	begc =  bcolors.OKGREEN
 	endc = bcolors.ENDC
@@ -78,6 +83,20 @@ def node_str(entry):
 				              entry.attributes['type'].value)
 	return ret
 
+def group_str(entry):
+	ret = 'group: '
+        if entry.attributes.has_key('if'):
+                ret += 'condition "%s"' % entry.attributes['if'].value
+        if entry.attributes.has_key('ns'):
+                ret += 'ns "%s"' % entry.attributes['ns'].value
+        return ret
+
+def rosparam_str(entry):
+        ret = 'rosparam: command "%s" file "%s"' % (entry.attributes['command'].value, entry.attributes['file'].value)
+        if entry.attributes.has_key('ns'):
+                ret += ' ns "%s"' % entry.attributes['ns'].value
+        return ret
+
 def print_internals(child_nodes, level, basen):
     for child in child_nodes:
         if child.nodeType == Node.ELEMENT_NODE:
@@ -86,24 +105,29 @@ def print_internals(child_nodes, level, basen):
             elif child.nodeName == '':
                 print_entry(level, basen, arg_str(child))
 	
+def warn_message(msg):
+        if options['OutputWarnings']:
+                print >>stderr, msg
 
-def browse_launch(dom, includes, ros_args, basen = '', level = 1, recursive = True):
+def browse_launch(dom, fname, includes, ros_args, basen = '', level = 1, recursive = True):
 	global i_num
 	for entry in dom.documentElement.childNodes:
+                if entry.attributes and entry.attributes.has_key('if'):
+                        warn_message('IF attribute not supported: %s: %s' % (fname, entry.toxml()))
 		if entry.nodeType != Node.ELEMENT_NODE:
 			continue
 		if entry.nodeName == 'include':
-			resolved_fname = resolve_ros_path(entry.attributes['file'].value, ros_args)
 			print_entry(level - 1, basen, include_str(entry))
-			includes[i_num] = resolved_fname
-			i_num += 1
-        		include_fname = popen('echo -n ' + resolved_fname).read()
-			include_data = file(include_fname).read()
-			include_dom = parseString(include_data)
-			if recursive:
-				browse_launch(include_dom, includes, ros_args.copy(), basename(include_fname), level + 1, recursive)
                         #print all internal tags
                         print_internals(entry.childNodes, level, basen)
+			if recursive:
+                                resolved_fname = resolve_ros_path(entry.attributes['file'].value, ros_args)
+                                includes[i_num] = resolved_fname
+                                i_num += 1
+                                include_fname = popen('echo -n ' + resolved_fname).read()
+                                include_data = file(include_fname).read()
+                                include_dom = parseString(include_data)
+				browse_launch(include_dom, include_fname, includes, ros_args.copy(), basename(include_fname), level + 1, recursive)
 		elif entry.nodeName == 'node':
 			print_entry(level - 1, basen, node_str(entry))
                         print_internals(entry.childNodes, level, basen)
@@ -114,6 +138,23 @@ def browse_launch(dom, includes, ros_args, basen = '', level = 1, recursive = Tr
 			if entry.getAttribute('value'):
 				ros_args[entry.attributes['name'].value] = entry.attributes['value'].value
 			print_entry(level - 1, basen, arg_str(entry))
+                elif entry.nodeName == 'rosparam':
+                        print_entry(level - 1, basen, rosparam_str(entry))
+                elif entry.nodeName == 'group':
+			print_entry(level - 1, basen, group_str(entry))
+                        print_internals(entry.childNodes, level, basen)
+                        if recursive:
+                                #NOTE: Not optimal: parseString is called second time for the same data
+                                group_data = ''
+                                for child in entry.childNodes:
+                                        child_str = child.toxml()
+                                        if child_str != '':
+                                            group_data += child_str
+                                #warping into fake_group tags is done because minidom requires a root tag
+                                group_data = '<fake_group>' + group_data + '</fake_group>'
+                                group_data = XML_HEADER + '\n' + group_data
+                                group_dom = parseString(group_data)
+                                browse_launch(group_dom, fname, includes, ros_args.copy(), basename(fname), level, recursive)
 		
 def cmd_loop(includes):
 	while True:
@@ -135,12 +176,17 @@ def do_browse(fname, recursive, interactive):
 	dom = parseString(data)
 	includes = {}
 	ros_args = {}
-	browse_launch(dom, includes, ros_args, basename(fname), 1, recursive)
+	browse_launch(dom, fname, includes, ros_args, basename(fname), 1, recursive)
 	if interactive:
 		cmd_loop(includes)
 
 def do_test():
-	dom = parseString('<a file="f.txt"> <node type="nodetype" /> </a>')
+        #test_str = '<rosparam command="load" file="$(find mcr_default_env_config)/$(arg robot_env)/speech_objects.yaml"/><rosparam command="load" file="$(find mcr_default_env_config)/$(arg robot_env)/speech_objects.yaml"/>'
+        test_str = '<a attr1="attr_value1" /> <b attr1="attr_value2" />'
+
+        print test_str
+        dom = parseString(test_str)
+	#dom = parseString('<a file="f.txt"> <node type="nodetype" /> </a>')
 	for child in dom.childNodes:
 		print child.nodeName, child.nodeValue, child.hasAttributes()
 		for child2 in child.childNodes:
