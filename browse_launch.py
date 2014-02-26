@@ -126,10 +126,8 @@ def rosparam_str(entry, ros_args, options, debug = False):
             print 'rosparam_str BEFORE:', entry.toxml()
         if entry.attributes.has_key('command'):
             command_val = entry.attributes['command'].value
-            print command_val
             ret += 'command "%s" ' % command_val
             if command_val == 'load':
-                print 'do_fname'
                 do_fname = True
         if entry.attributes.has_key('file'):
             (resolved_fname, were_subst) = eval_ros_str(entry.attributes['file'].value, ros_args, options['subst_values'], debug=debug)
@@ -138,7 +136,6 @@ def rosparam_str(entry, ros_args, options, debug = False):
             ret += 'file "%s" ' % resolved_fname
             if do_fname:
                 fname = resolved_fname
-                print fname
         if entry.attributes.has_key('ns'):
                 ret += 'ns "%s" ' % entry.attributes['ns'].value
         return (ret, fname)
@@ -211,7 +208,7 @@ def browse_launch(dom, fname, includes, ros_args, options, params, param_fnames,
                     subst_ros_arg(ros_args[entry.attributes['name'].value], entry.attributes['value'].value, options['subst_values'])
                 print_entry(level - 1, basen, arg_str(entry))
         elif entry.nodeName == 'rosparam':
-            (s, fname) = rosparam_str(entry, ros_args, options, debug=True)
+            (s, fname) = rosparam_str(entry, ros_args, options)
             print_entry(level - 1, basen, s)
             if fname != '':
                 param_fnames.append(fname)
