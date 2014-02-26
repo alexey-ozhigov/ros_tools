@@ -119,25 +119,40 @@ def group_str(entry):
         return ret
 
 def rosparam_str(entry, ros_args, options, debug = False):
+        fname = ''
+        do_fname = False
+        ret = 'rosparam: '
         if debug:
-            print 'rosparam_str BEFORE:', entry.attributes['file'].value
-        (resolved_fname, were_subst) = eval_ros_str(entry.attributes['file'].value, ros_args, options['subst_values'], debug=debug)
-        if debug:
-            print 'rosparam_str AFTER:', resolved_fname
-        ret = 'rosparam: command "%s" file "%s"' % (entry.attributes['command'].value, resolved_fname)
+            print 'rosparam_str BEFORE:', entry.toxml()
+        if entry.attributes.has_key('command'):
+            command_val = entry.attributes['command'].value
+            print command_val
+            ret += 'command "%s" ' % command_val
+            if command_val == 'load':
+                print 'do_fname'
+                do_fname = True
+        if entry.attributes.has_key('file'):
+            (resolved_fname, were_subst) = eval_ros_str(entry.attributes['file'].value, ros_args, options['subst_values'], debug=debug)
+            if debug:
+                print 'rosparam_str AFTER:', resolved_fname
+            ret += 'file "%s" ' % resolved_fname
+            if do_fname:
+                fname = resolved_fname
+                print fname
         if entry.attributes.has_key('ns'):
-                ret += ' ns "%s"' % entry.attributes['ns'].value
-        return ret
+                ret += 'ns "%s" ' % entry.attributes['ns'].value
+        return (ret, fname)
 
 def param_str(entry, fname, ros_args, options):
     #NOTE: only name and value attributes supported
+    (name, _) = eval_ros_str(entry.attributes['name'].value, ros_args, options['subst_values'])
     if entry.attributes.has_key('value'):
         value = entry.attributes['value'].value
-        (value, were_subst) = eval_ros_str(value, ros_args, options['subst_values'])
+        (value, _) = eval_ros_str(value, ros_args, options['subst_values'])
     else:
         value = '<UNK>'
         warn_message('file attrs for param tag not supported', fname, entry, options)
-    return 'param: %s = %s' % (entry.attributes['name'].value, value)
+    return 'param: %s = %s' % (name, value)
 
 def print_internals(child_nodes, level, basen):
     for child in child_nodes:
@@ -151,7 +166,7 @@ def warn_message(msg, fname, entry, options):
         if options['output_warnings']:
             print >>stderr, '%s: %s:\n %s' % (fname, entry.toxml(), msg)
 
-def browse_launch(dom, fname, includes, ros_args, options, basen = '', level = 1, recursive = True):
+def browse_launch(dom, fname, includes, ros_args, options, params, param_fnames, basen = '', level = 1, recursive = True):
     global i_num
     for entry in dom.documentElement.childNodes:
         if entry.attributes and entry.attributes.has_key('if'):
@@ -169,10 +184,22 @@ def browse_launch(dom, fname, includes, ros_args, options, basen = '', level = 1
                 include_fname = popen('echo -n ' + resolved_fname).read()
                 include_data = file(include_fname).read()
                 include_dom = parseString(include_data)
-                browse_launch(include_dom, include_fname, includes, ros_args.copy(), options, basename(include_fname), level + 1, recursive)
+                browse_launch(include_dom, include_fname, includes, ros_args.copy(), options, params, param_fnames, basename(include_fname), level + 1, recursive)
         elif entry.nodeName == 'node':
             print_entry(level - 1, basen, node_str(entry))
             print_internals(entry.childNodes, level, basen)
+            if recursive:
+                #NOTE: Not optimal: parseString is called second time for the same data
+                node_data = ''
+                for child in entry.childNodes:
+                    child_str = child.toxml()
+                    if child_str != '':
+                        node_data += child_str
+                #warping into fake_group tags is done because minidom requires a root tag
+                node_data = '<fake_group>' + node_data + '</fake_group>'
+                node_data = XML_HEADER + '\n' + node_data
+                node_dom = parseString(node_data)
+                browse_launch(node_dom, fname, includes, ros_args.copy(), options, params, param_fnames, basename(fname), level, recursive)
         elif entry.nodeName == 'arg':
             #Update ros_args for later substitutions into launch files
             if entry.getAttribute('default'):
@@ -184,7 +211,10 @@ def browse_launch(dom, fname, includes, ros_args, options, basen = '', level = 1
                     subst_ros_arg(ros_args[entry.attributes['name'].value], entry.attributes['value'].value, options['subst_values'])
                 print_entry(level - 1, basen, arg_str(entry))
         elif entry.nodeName == 'rosparam':
-            print_entry(level - 1, basen, rosparam_str(entry, ros_args, options))
+            (s, fname) = rosparam_str(entry, ros_args, options, debug=True)
+            print_entry(level - 1, basen, s)
+            if fname != '':
+                param_fnames.append(fname)
         elif entry.nodeName == 'param':
             print_entry(level - 1, basen, param_str(entry, fname, ros_args, options))
         elif entry.nodeName == 'group':
@@ -201,7 +231,8 @@ def browse_launch(dom, fname, includes, ros_args, options, basen = '', level = 1
                 group_data = '<fake_group>' + group_data + '</fake_group>'
                 group_data = XML_HEADER + '\n' + group_data
                 group_dom = parseString(group_data)
-                browse_launch(group_dom, fname, includes, ros_args.copy(), options, basename(fname), level, recursive)
+                browse_launch(group_dom, fname, includes, ros_args.copy(), options, params, param_fnames, basename(fname), level, recursive)
+    return param_fnames
             
 def cmd_loop(includes):
 	while True:
@@ -223,7 +254,11 @@ def do_browse(fname, options, recursive, interactive):
 	dom = parseString(data)
 	includes = {}
 	ros_args = {}
-	browse_launch(dom, fname, includes, ros_args, options, basename(fname), 1, recursive)
+	param_fnames = browse_launch(dom, fname, includes, ros_args, options, {}, [], basename(fname), 1, recursive)
+        if options['show_params']:
+            for fname in param_fnames:
+                print '\n\nparamfile %s' % fname
+                print popen('cat %s' % fname).read()
 	if interactive:
 		cmd_loop(includes)
 
@@ -239,6 +274,11 @@ def do_test():
 		for child2 in child.childNodes:
 			if child2.nodeType != Node.TEXT_NODE:
 				print child2.nodeName
+def do_test2():
+    s = '$(rospack find cob_navigation_config)/${ROBOT}/costmap_common_params.yaml'
+    fname = eval_ros_str(s, {}, {}, debug=True)[0]
+    print popen('cat %s' % fname).read()
+
 
 if __name__ == '__main__':
 	try:
@@ -270,5 +310,5 @@ if __name__ == '__main__':
                 show_params = default_options['show_params']
         options['subst_values'] = subst_values
         options['show_params'] = show_params
-	do_browse(fname, options, recursive, interactive)
-	#do_test()
+        do_browse(fname, options, recursive, interactive)
+        #do_test2()
